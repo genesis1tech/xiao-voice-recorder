@@ -1,0 +1,82 @@
+/*
+ * config.h - Configuration for XIAO Voice Recorder
+ * 
+ * Copy this file to config.h and fill in your credentials
+ * 
+ * NOTE: WiFi credentials are NO LONGER needed here!
+ * The device will enter AP mode on first boot where you can
+ * connect your phone and enter WiFi credentials via web page.
+ */
+
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// ============================================
+// WIFI CONFIGURATION
+// ============================================
+// NOT NEEDED - Device enters AP mode automatically!
+// Connect to "VoiceRecorder-XXXXXX" network, then
+// open http://192.168.4.1 to enter WiFi credentials
+
+// ============================================
+// API KEYS
+// ============================================
+
+// Groq API (for Whisper + LLM)
+// Get free key at: https://console.groq.com
+#define GROQ_API_KEY "gsk_YOUR_GROQ_KEY_HERE"
+
+// SendGrid API (for email)
+// Get free key at: https://sendgrid.com (100 emails/day free)
+#define SENDGRID_API_KEY "SG.YOUR_SENDGRID_KEY_HERE"
+
+// ============================================
+// EMAIL CONFIGURATION
+// ============================================
+#define EMAIL_TO "your-email@example.com"
+#define EMAIL_FROM "recorder@yourdomain.com"
+#define EMAIL_SUBJECT "Voice Recording Summary"
+
+// ============================================
+// RECORDING SETTINGS
+// ============================================
+#define SAMPLE_RATE 16000       // 16kHz (Whisper optimal)
+#define SAMPLE_BITS 16          // 16-bit audio
+#define CHANNELS 1              // Mono
+#define MAX_RECORDING_SECONDS 300  // 5 minutes max
+#define RECORDING_FILENAME "/recording.wav"
+
+// ============================================
+// HARDWARE PINS
+// ============================================
+#define BUTTON_PIN 1            // D1 for external button
+#define LED_PIN 21              // Built-in LED (GPIO 21)
+#define SD_CS 21                // SD Card Chip Select
+
+// ============================================
+// I2S MICROPHONE PINS (XIAO ESP32S3 Sense)
+// ============================================
+#define I2S_BCLK 42
+#define I2S_WS 41
+#define I2S_DO 40
+
+// ============================================
+// TIMING
+// ============================================
+#define WIFI_CONNECT_TIMEOUT 10000  // 10 seconds
+#define API_TIMEOUT 60000           // 60 seconds
+
+// ============================================
+// DEBUG
+// ============================================
+#define DEBUG_SERIAL true
+
+#if DEBUG_SERIAL
+  #define DEBUG_PRINT(x) Serial.println(x)
+  #define DEBUG_PRINTF(fmt, ...) Serial.printf(fmt, ##__VA_ARGS__)
+#else
+  #define DEBUG_PRINT(x)
+  #define DEBUG_PRINTF(fmt, ...)
+#endif
+
+#endif // CONFIG_H
