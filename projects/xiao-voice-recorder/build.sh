@@ -15,7 +15,7 @@ set -e
 
 # Configuration
 FQBN="esp32:esp32:XIAO_ESP32S3"
-SKETCH_DIR="./src"
+SKETCH_DIR="./voice_recorder"
 SKETCH="$SKETCH_DIR/voice_recorder.ino"
 BUILD_DIR="./build"
 BAUD=115200
@@ -116,7 +116,7 @@ cmd_compile() {
     # Check config.h exists
     if [ ! -f "$SKETCH_DIR/config.h" ]; then
         echo -e "${RED}Error: config.h not found!${NC}"
-        echo "Copy config.h.example to config.h and fill in your credentials."
+        echo "Copy voice_recorder/config.h.example to voice_recorder/config.h and fill in your credentials."
         exit 1
     fi
     
