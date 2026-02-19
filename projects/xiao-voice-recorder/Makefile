@@ -9,7 +9,7 @@
 #   make clean    - Clean build
 
 FQBN := esp32:esp32:XIAO_ESP32S3
-SKETCH := ./src/voice_recorder.ino
+SKETCH := ./voice_recorder/voice_recorder.ino
 BUILD_DIR := ./build
 BAUD := 115200
 

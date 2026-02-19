@@ -40,6 +40,7 @@ EmailClient email;
 // Button handling
 volatile bool buttonPressed = false;
 volatile unsigned long buttonPressTime = 0;
+volatile unsigned long lastButtonTime = 0;
 volatile bool buttonHeld = false;
 const unsigned long debounceDelay = 200;
 const unsigned long longPressTime = 3000;  // 3 seconds to reset WiFi
@@ -127,7 +128,7 @@ void setup() {
         Serial.printf("\nAP Mode: Connect to '%s'\n", wifiManager.getAPSSID().c_str());
         Serial.println("Then open http://192.168.4.1 in your browser");
         currentState = STATE_WIFI_SETUP;
-    
+    }
 }
 
 void initAfterWiFi() {
