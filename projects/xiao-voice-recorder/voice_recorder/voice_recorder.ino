@@ -50,14 +50,16 @@ bool ledState = false;
 
 void IRAM_ATTR buttonISR() {
     unsigned long now = millis();
-    
+
     if (digitalRead(BUTTON_PIN) == LOW) {
-        // Button pressed
+        // Button pressed - only accept if outside debounce window
         if (now - lastButtonTime > debounceDelay) {
             buttonPressTime = now;
-            buttonPressed = false;  // Will be set on release if short press
+            buttonPressed = false;
             buttonHeld = true;
+            lastButtonTime = now;  // Start debounce window from this press
         }
+        // If debounced: ignore entirely - don't update lastButtonTime
     } else {
         // Button released
         if (buttonHeld) {
@@ -67,8 +69,9 @@ void IRAM_ATTR buttonISR() {
             }
             // Long press handled in loop()
             buttonHeld = false;
+            lastButtonTime = now;
         }
-        lastButtonTime = now;
+        // If press was debounced (buttonHeld=false): ignore release too
     }
 }
 
@@ -125,6 +128,7 @@ void setup() {
         // Clear any button state that accumulated during init (GPIO0 picks up noise)
         buttonHeld = false;
         buttonPressed = false;
+        lastButtonTime = 0;
         currentState = STATE_IDLE;
     } else {
         Serial.printf("\nAP Mode: Connect to '%s'\n", wifiManager.getAPSSID().c_str());
@@ -212,6 +216,7 @@ void handleWiFiSetup() {
         // Clear any button state that accumulated during init (GPIO0 picks up noise)
         buttonHeld = false;
         buttonPressed = false;
+        lastButtonTime = 0;
         currentState = STATE_IDLE;
     }
 
