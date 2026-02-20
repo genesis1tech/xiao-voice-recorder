@@ -9,7 +9,6 @@
 
 #include <Arduino.h>
 #include <WiFiClientSecure.h>
-#include <SD.h>
 #include "config.h"
 
 class WhisperClient {
@@ -29,8 +28,8 @@ public:
     
     void setApiKey(const char* key) { apiKey = String(key); }
     
-    // Transcribe audio file from SD card
-    bool transcribe(const char* filename);
+    // Transcribe audio from a WAV buffer in memory
+    bool transcribe(const uint8_t* audioData, size_t audioSize);
     
     // Get results
     String getTranscript() { return transcript; }
@@ -48,57 +47,30 @@ WhisperClient::~WhisperClient() {
     client.stop();
 }
 
-bool WhisperClient::transcribe(const char* filename) {
-    DEBUG_PRINTF("Transcribing: %s", filename);
-    
-    // Check if file exists
-    if (!SD.exists(filename)) {
-        errorMessage = "File not found: " + String(filename);
+bool WhisperClient::transcribe(const uint8_t* audioData, size_t audioSize) {
+    DEBUG_PRINTF("Transcribing buffer: %d bytes", audioSize);
+
+    if (!audioData || audioSize == 0) {
+        errorMessage = "Empty audio buffer";
         DEBUG_PRINT(errorMessage);
         return false;
     }
-    
-    // Open and read file
-    File file = SD.open(filename, FILE_READ);
-    if (!file) {
-        errorMessage = "Failed to open file";
-        DEBUG_PRINT(errorMessage);
-        return false;
-    }
-    
-    size_t fileSize = file.size();
-    DEBUG_PRINTF("Audio file size: %d bytes", fileSize);
-    
-    // Read entire file into memory (PSRAM helps here)
-    uint8_t* audioBuffer = (uint8_t*)malloc(fileSize);
-    if (!audioBuffer) {
-        errorMessage = "Failed to allocate memory";
-        DEBUG_PRINT(errorMessage);
-        file.close();
-        return false;
-    }
-    
-    file.read(audioBuffer, fileSize);
-    file.close();
-    
+
     // Connect to Groq API
     DEBUG_PRINT("Connecting to Groq API...");
-    
+
     client.setInsecure();  // Skip cert verification for now
     if (!client.connect("api.groq.com", 443)) {
         errorMessage = "Failed to connect to API";
         DEBUG_PRINT(errorMessage);
-        free(audioBuffer);
         return false;
     }
-    
+
     DEBUG_PRINT("Connected! Sending audio...");
-    
+
     // Send multipart form data
-    success = sendMultipartFormData(audioBuffer, fileSize);
-    
-    free(audioBuffer);
-    
+    success = sendMultipartFormData(audioData, audioSize);
+
     if (!success) {
         errorMessage = "Failed to send request";
         return false;
@@ -109,14 +81,14 @@ bool WhisperClient::transcribe(const char* filename) {
     String response = "";
     unsigned long startTime = millis();
     
-    while (client.connected() && (millis() - startTime < API_TIMEOUT)) {
+    while ((client.connected() || client.available()) && (millis() - startTime < API_TIMEOUT)) {
         while (client.available()) {
             char c = client.read();
             response += c;
         }
         delay(10);
     }
-    
+
     client.stop();
     
     // Parse response
@@ -149,11 +121,12 @@ bool WhisperClient::sendMultipartFormData(const uint8_t* audioData, size_t audio
     size_t contentLength = header.length() + audioSize + footer.length();
     
     // Build HTTP request
-    String httpRequest = "POST /openai/v1/audio/transcriptions HTTP/1.1\r\n";
+    String httpRequest = "POST /openai/v1/audio/transcriptions HTTP/1.0\r\n";
     httpRequest += "Host: api.groq.com\r\n";
     httpRequest += "Authorization: Bearer " + apiKey + "\r\n";
     httpRequest += "Content-Type: multipart/form-data; boundary=" + boundary + "\r\n";
     httpRequest += "Content-Length: " + String(contentLength) + "\r\n";
+    httpRequest += "Connection: close\r\n";
     httpRequest += "\r\n";
     
     // Send HTTP headers

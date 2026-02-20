@@ -59,8 +59,8 @@ public:
     bool inAPModeNow() { return inAPMode; }
     String getAPSSID() { return apSSID; }
     String getSSID() { return savedSSID; }
-    
-    // Clear saved WiFi credentials
+
+    bool reconnect();
     void forgetWiFi();
 };
 
@@ -100,20 +100,42 @@ bool WiFiManager::begin() {
         
         if (WiFi.status() == WL_CONNECTED) {
             connected = true;
+            WiFi.setSleep(false);  // Prevent modem sleep dropping connection
             DEBUG_PRINTF("\nWiFi connected! IP: %s", WiFi.localIP().toString().c_str());
             return true;
         }
     }
-    
+
     // Start AP mode
     startAP();
     return false;
 }
 
+bool WiFiManager::reconnect() {
+    if (WiFi.status() == WL_CONNECTED) return true;
+    if (savedSSID.length() == 0) return false;
+
+    DEBUG_PRINT("WiFi dropped, reconnecting...");
+    WiFi.disconnect();
+    WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED) {
+        if (millis() - start > WIFI_CONNECT_TIMEOUT) {
+            DEBUG_PRINT("Reconnect timeout");
+            return false;
+        }
+        delay(500);
+    }
+    WiFi.setSleep(false);
+    DEBUG_PRINTF("Reconnected! IP: %s", WiFi.localIP().toString().c_str());
+    return true;
+}
+
 void WiFiManager::startAP() {
     DEBUG_PRINT("Starting Access Point...");
     
-    WiFi.mode(WIFI_AP);
+    WiFi.mode(WIFI_AP_STA);  // APSTA so scanNetworks() doesn't drop AP clients
     WiFi.softAP(apSSID.c_str(), AP_PASSWORD, AP_CHANNEL, false, AP_MAX_CONN);
     
     // Start DNS server (captive portal)
@@ -135,6 +157,7 @@ void WiFiManager::stopAP() {
     server.stop();
     dnsServer.stop();
     WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_STA);  // Switch fully to station mode
     inAPMode = false;
 }
 
@@ -145,132 +168,96 @@ void WiFiManager::setupCaptivePortal() {
 }
 
 void WiFiManager::handleRoot() {
-    String html = R"(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Voice Recorder - WiFi Setup</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
+    // Scan for networks
+    int n = WiFi.scanNetworks();
+
+    String html = "<!DOCTYPE html><html><head>"
+        "<meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<title>Voice Recorder - WiFi Setup</title>"
+        "<style>"
+        "* { box-sizing: border-box; margin: 0; padding: 0; }"
+        "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;"
+        "  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"
+        "  min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }"
+        ".card { background: white; border-radius: 16px; padding: 32px; width: 100%;"
+        "  max-width: 400px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }"
+        ".icon { text-align: center; font-size: 48px; margin-bottom: 16px; }"
+        "h1 { font-size: 24px; margin-bottom: 8px; color: #333; }"
+        ".subtitle { color: #666; margin-bottom: 20px; font-size: 14px; }"
+        ".net-list { margin-bottom: 16px; max-height: 220px; overflow-y: auto;"
+        "  border: 2px solid #e0e0e0; border-radius: 8px; }"
+        ".net { display: flex; align-items: center; justify-content: space-between;"
+        "  padding: 12px 14px; cursor: pointer; border-bottom: 1px solid #f0f0f0;"
+        "  transition: background 0.15s; }"
+        ".net:last-child { border-bottom: none; }"
+        ".net:hover { background: #f5f5f5; }"
+        ".net.selected { background: #f0f3ff; }"
+        ".net-name { font-size: 15px; color: #333; font-weight: 500; }"
+        ".net-rssi { font-size: 12px; color: #999; }"
+        ".lock { font-size: 12px; color: #bbb; margin-left: 6px; }"
+        ".form-group { margin-bottom: 14px; }"
+        "label { display: block; font-weight: 600; margin-bottom: 6px; color: #444; font-size: 14px; }"
+        "input { width: 100%; padding: 12px 16px; border: 2px solid #e0e0e0;"
+        "  border-radius: 8px; font-size: 16px; }"
+        "input:focus { outline: none; border-color: #667eea; }"
+        "button { width: 100%; padding: 14px;"
+        "  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"
+        "  color: white; border: none; border-radius: 8px; font-size: 16px;"
+        "  font-weight: 600; cursor: pointer; }"
+        ".none { padding: 16px; text-align: center; color: #999; font-size: 14px; }"
+        "</style></head><body><div class='card'>"
+        "<div class='icon'>&#x1F3A4;</div>"
+        "<h1>Voice Recorder</h1>"
+        "<p class='subtitle'>Tap a network, enter password, connect.</p>";
+
+    // Network list
+    if (n <= 0) {
+        html += "<div class='net-list'><div class='none'>No networks found</div></div>";
+    } else {
+        html += "<div class='net-list'>";
+        for (int i = 0; i < n; i++) {
+            String ssid   = WiFi.SSID(i);
+            int    rssi   = WiFi.RSSI(i);
+            bool   secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+
+            // Signal bars: ▂▄▆█ rough mapping
+            String bars;
+            if      (rssi >= -55) bars = "&#x2588;&#x2588;&#x2588;&#x2588;";
+            else if (rssi >= -65) bars = "&#x2588;&#x2588;&#x2588;&#x2591;";
+            else if (rssi >= -75) bars = "&#x2588;&#x2588;&#x2591;&#x2591;";
+            else                  bars = "&#x2588;&#x2591;&#x2591;&#x2591;";
+
+            ssid.replace("'", "\\'");  // escape for JS
+            html += "<div class='net' onclick=\"selectNet('" + ssid + "')\">"
+                    "<span class='net-name'>" + WiFi.SSID(i) + "</span>"
+                    "<span class='net-rssi'>" + bars + (secure ? " &#x1F512;" : "") + "</span>"
+                    "</div>";
         }
-        .card {
-            background: white;
-            border-radius: 16px;
-            padding: 32px;
-            width: 100%;
-            max-width: 400px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-        }
-        h1 {
-            font-size: 24px;
-            margin-bottom: 8px;
-            color: #333;
-        }
-        .subtitle {
-            color: #666;
-            margin-bottom: 24px;
-            font-size: 14px;
-        }
-        .form-group {
-            margin-bottom: 16px;
-        }
-        label {
-            display: block;
-            font-weight: 600;
-            margin-bottom: 6px;
-            color: #444;
-            font-size: 14px;
-        }
-        input[type="text"], input[type="password"] {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.2s;
-        }
-        input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        button {
-            width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-        .icon {
-            text-align: center;
-            font-size: 48px;
-            margin-bottom: 16px;
-        }
-        .scanning {
-            text-align: center;
-            padding: 20px;
-            color: #666;
-        }
-        .networks {
-            margin-bottom: 16px;
-        }
-        .network {
-            padding: 12px;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            margin-bottom: 8px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .network:hover {
-            background: #f5f5f5;
-        }
-        .network.selected {
-            border-color: #667eea;
-            background: #f0f3ff;
-        }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="icon">🎙️</div>
-        <h1>Voice Recorder Setup</h1>
-        <p class="subtitle">Connect your device to WiFi</p>
-        
-        <form action="/save" method="POST">
-            <div class="form-group">
-                <label for="ssid">WiFi Network</label>
-                <input type="text" id="ssid" name="ssid" placeholder="Network name" required>
-            </div>
-            <div class="form-group">
-                <label for="password">Password</label>
-                <input type="password" id="password" name="password" placeholder="WiFi password">
-            </div>
-            <button type="submit">Connect</button>
-        </form>
-    </div>
-</body>
-</html>
-)";
-    
+        html += "</div>";
+    }
+
+    html += "<form action='/save' method='POST'>"
+            "<div class='form-group'>"
+            "<label for='ssid'>Network</label>"
+            "<input type='text' id='ssid' name='ssid' placeholder='Network name' required>"
+            "</div>"
+            "<div class='form-group'>"
+            "<label for='password'>Password</label>"
+            "<input type='password' id='password' name='password' placeholder='WiFi password'>"
+            "</div>"
+            "<button type='submit'>Connect</button>"
+            "</form>"
+            "<script>"
+            "function selectNet(s){"
+            "  document.getElementById('ssid').value=s;"
+            "  document.querySelectorAll('.net').forEach(function(el){el.classList.remove('selected');});"
+            "  event.currentTarget.classList.add('selected');"
+            "  document.getElementById('password').focus();"
+            "}"
+            "</script>"
+            "</div></body></html>";
+
     server.send(200, "text/html", html);
 }
 
@@ -341,10 +328,9 @@ void WiFiManager::handleSave() {
     server.send(200, "text/html", html);
     delay(1000);
     
-    // Stop AP and try to connect
+    // Stop AP (switches to WIFI_STA) and try to connect
     stopAP();
-    
-    WiFi.mode(WIFI_STA);
+
     WiFi.begin(ssid.c_str(), password.c_str());
     
     connectStartTime = millis();
@@ -360,6 +346,7 @@ void WiFiManager::handleSave() {
     
     if (WiFi.status() == WL_CONNECTED) {
         connected = true;
+        WiFi.setSleep(false);
         DEBUG_PRINTF("\nConnected! IP: %s", WiFi.localIP().toString().c_str());
     }
 }

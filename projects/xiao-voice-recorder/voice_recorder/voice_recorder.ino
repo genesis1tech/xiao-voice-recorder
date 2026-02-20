@@ -8,7 +8,6 @@
  */
 
 #include <WiFi.h>
-#include <SD.h>
 #include "config.h"
 #include "wifi_manager.h"
 #include "audio_recorder.h"
@@ -37,74 +36,83 @@ WhisperClient whisper;
 LLMClient llm;
 EmailClient email;
 
-// Button handling
-volatile bool buttonPressed = false;
-volatile unsigned long buttonPressTime = 0;
-volatile unsigned long lastButtonTime = 0;
-volatile bool buttonHeld = false;
-const unsigned long debounceDelay = 200;
+// Button handling (polled - no interrupt)
+bool buttonPressed = false;
+bool buttonDown = false;
+bool lastRawButton = HIGH;
+bool debouncedButton = HIGH;
+unsigned long lastDebounceTime = 0;
+unsigned long buttonPressStart = 0;
+const unsigned long debounceDelay = 50;
 const unsigned long longPressTime = 3000;  // 3 seconds to reset WiFi
 
 // LED patterns
 unsigned long lastLedBlink = 0;
 bool ledState = false;
 
-void IRAM_ATTR buttonISR() {
-    unsigned long now = millis();
-    
-    if (digitalRead(BUTTON_PIN) == LOW) {
-        // Button pressed
-        if (now - lastButtonTime > debounceDelay) {
-            buttonPressTime = now;
-            buttonPressed = false;  // Will be set on release if short press
-            buttonHeld = true;
-        }
-    } else {
-        // Button released
-        if (buttonHeld) {
-            unsigned long pressDuration = now - buttonPressTime;
-            if (pressDuration < longPressTime) {
-                buttonPressed = true;  // Short press
-            }
-            // Long press handled in loop()
-            buttonHeld = false;
-        }
-        lastButtonTime = now;
-    }
-}
+// Boot time for startup grace period
+unsigned long bootTime = 0;
+const unsigned long buttonGracePeriod = 2000;  // ignore button for 2s after boot
 
-void checkLongPress() {
-    // Check if button is being held (not in ISR to avoid blocking)
-    if (buttonHeld && digitalRead(BUTTON_PIN) == LOW) {
-        if (millis() - buttonPressTime >= longPressTime) {
-            // Long press detected!
-            buttonHeld = false;
-            
-            Serial.println("\n========================================");
-            Serial.println("  LONG PRESS - RESETTING WIFI!");
-            Serial.println("========================================\n");
-            
-            // Flash LED rapidly to indicate reset
-            for (int i = 0; i < 10; i++) {
-                digitalWrite(LED_PIN, LOW);
-                delay(50);
-                digitalWrite(LED_PIN, HIGH);
-                delay(50);
+void pollButton() {
+    // Grace period: ignore all button input while hardware settles after boot
+    if (millis() - bootTime < buttonGracePeriod) return;
+
+    bool raw = digitalRead(BUTTON_PIN);  // HIGH = not pressed, LOW = pressed
+
+    // Debounce: only accept state after it's stable for debounceDelay ms
+    if (raw != lastRawButton) {
+        lastDebounceTime = millis();
+        lastRawButton = raw;
+    }
+
+    if ((millis() - lastDebounceTime) > debounceDelay && raw != debouncedButton) {
+        debouncedButton = raw;
+
+        if (debouncedButton == LOW) {
+            // Button just pressed
+            buttonPressStart = millis();
+            buttonDown = true;
+            Serial.println("[BTN] down");
+        } else if (buttonDown) {
+            // Button just released
+            unsigned long held = millis() - buttonPressStart;
+            buttonDown = false;
+            Serial.printf("[BTN] up after %lu ms\n", held);
+            if (held < longPressTime) {
+                buttonPressed = true;
             }
-            
-            // Clear saved WiFi credentials
-            wifiManager.forgetWiFi();
-            
-            Serial.println("WiFi credentials cleared. Restarting...");
-            delay(500);
-            ESP.restart();
         }
+    }
+
+    // Long press: only allowed when idle (not during WiFi setup/captive portal)
+    if (buttonDown && (millis() - buttonPressStart) >= longPressTime
+            && currentState != STATE_WIFI_SETUP) {
+        buttonDown = false;
+        debouncedButton = HIGH;  // prevent re-trigger
+
+        Serial.println("\n========================================");
+        Serial.println("  LONG PRESS - RESETTING WIFI!");
+        Serial.println("========================================\n");
+
+        for (int i = 0; i < 10; i++) {
+            digitalWrite(LED_PIN, LOW);
+            delay(50);
+            digitalWrite(LED_PIN, HIGH);
+            delay(50);
+        }
+
+        wifiManager.forgetWiFi();
+        Serial.println("WiFi credentials cleared. Restarting...");
+        delay(500);
+        ESP.restart();
     }
 }
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
+    bootTime = millis();
     
     Serial.println("\n========================================");
     Serial.println("  XIAO Voice Recorder & Summarizer");
@@ -114,15 +122,16 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, HIGH);  // LED off (inverted)
     
-    // Initialize button with interrupt
+    // Initialize button (polled in loop)
     pinMode(BUTTON_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
     
     // Start WiFi Manager (will enter AP mode if no saved credentials)
     Serial.println("Starting WiFi Manager...");
     if (wifiManager.begin()) {
         Serial.printf("WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
         initAfterWiFi();
+        buttonPressed = false;
+        buttonDown = false;
         currentState = STATE_IDLE;
     } else {
         Serial.printf("\nAP Mode: Connect to '%s'\n", wifiManager.getAPSSID().c_str());
@@ -159,8 +168,7 @@ void initAfterWiFi() {
 }
 
 void loop() {
-    // Check for long press (reset WiFi)
-    checkLongPress();
+    pollButton();
     
     // Handle state machine
     switch (currentState) {
@@ -207,9 +215,11 @@ void handleWiFiSetup() {
         Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
         
         initAfterWiFi();
+        buttonPressed = false;
+        buttonDown = false;
         currentState = STATE_IDLE;
     }
-    
+
     // LED: slow pulse in AP mode
     static unsigned long lastPulse = 0;
     static int brightness = 0;
@@ -236,7 +246,7 @@ void handleIdle() {
         buttonPressed = false;
         Serial.println("\n>> Button pressed - starting recording...");
         
-        if (recorder.startRecording(RECORDING_FILENAME)) {
+        if (recorder.startRecording()) {
             currentState = STATE_RECORDING;
             Serial.println("Recording... (press button again to stop)");
         } else {
@@ -272,7 +282,12 @@ void handleRecording() {
 }
 
 void handleUploading() {
-    if (whisper.transcribe(RECORDING_FILENAME)) {
+    if (!wifiManager.reconnect()) {
+        lastError = "WiFi lost, could not reconnect";
+        currentState = STATE_ERROR;
+        return;
+    }
+    if (whisper.transcribe(recorder.getBuffer(), recorder.getBufferSize())) {
         Serial.println("\nTranscription complete!");
         Serial.println("----------------------------------------");
         Serial.println(whisper.getTranscript());
@@ -287,6 +302,11 @@ void handleUploading() {
 }
 
 void handleSummarizing() {
+    if (!wifiManager.reconnect()) {
+        lastError = "WiFi lost before summarizing";
+        currentState = STATE_ERROR;
+        return;
+    }
     String transcript = whisper.getTranscript();
     
     if (llm.summarize(transcript)) {
@@ -304,6 +324,11 @@ void handleSummarizing() {
 }
 
 void handleEmailing() {
+    if (!wifiManager.reconnect()) {
+        lastError = "WiFi lost before emailing";
+        currentState = STATE_ERROR;
+        return;
+    }
     String summary = llm.getSummary();
     String transcript = whisper.getTranscript();
     
