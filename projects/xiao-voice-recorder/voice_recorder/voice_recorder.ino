@@ -50,7 +50,14 @@ const unsigned long longPressTime = 3000;  // 3 seconds to reset WiFi
 unsigned long lastLedBlink = 0;
 bool ledState = false;
 
+// Boot time for startup grace period
+unsigned long bootTime = 0;
+const unsigned long buttonGracePeriod = 2000;  // ignore button for 2s after boot
+
 void pollButton() {
+    // Grace period: ignore all button input while hardware settles after boot
+    if (millis() - bootTime < buttonGracePeriod) return;
+
     bool raw = digitalRead(BUTTON_PIN);  // HIGH = not pressed, LOW = pressed
 
     // Debounce: only accept state after it's stable for debounceDelay ms
@@ -78,8 +85,9 @@ void pollButton() {
         }
     }
 
-    // Long press: detect while still held
-    if (buttonDown && (millis() - buttonPressStart) >= longPressTime) {
+    // Long press: only allowed when idle (not during WiFi setup/captive portal)
+    if (buttonDown && (millis() - buttonPressStart) >= longPressTime
+            && currentState != STATE_WIFI_SETUP) {
         buttonDown = false;
         debouncedButton = HIGH;  // prevent re-trigger
 
@@ -104,6 +112,7 @@ void pollButton() {
 void setup() {
     Serial.begin(115200);
     delay(1000);
+    bootTime = millis();
     
     Serial.println("\n========================================");
     Serial.println("  XIAO Voice Recorder & Summarizer");
