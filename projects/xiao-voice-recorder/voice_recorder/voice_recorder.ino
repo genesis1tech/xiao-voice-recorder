@@ -8,7 +8,6 @@
  */
 
 #include <WiFi.h>
-#include <SD.h>
 #include "config.h"
 #include "wifi_manager.h"
 #include "audio_recorder.h"
@@ -116,7 +115,7 @@ void setup() {
     
     // Initialize button with interrupt
     pinMode(BUTTON_PIN, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, CHANGE);
     
     // Start WiFi Manager (will enter AP mode if no saved credentials)
     Serial.println("Starting WiFi Manager...");
@@ -236,7 +235,7 @@ void handleIdle() {
         buttonPressed = false;
         Serial.println("\n>> Button pressed - starting recording...");
         
-        if (recorder.startRecording(RECORDING_FILENAME)) {
+        if (recorder.startRecording()) {
             currentState = STATE_RECORDING;
             Serial.println("Recording... (press button again to stop)");
         } else {
@@ -272,7 +271,12 @@ void handleRecording() {
 }
 
 void handleUploading() {
-    if (whisper.transcribe(RECORDING_FILENAME)) {
+    if (!wifiManager.reconnect()) {
+        lastError = "WiFi lost, could not reconnect";
+        currentState = STATE_ERROR;
+        return;
+    }
+    if (whisper.transcribe(recorder.getBuffer(), recorder.getBufferSize())) {
         Serial.println("\nTranscription complete!");
         Serial.println("----------------------------------------");
         Serial.println(whisper.getTranscript());
@@ -287,6 +291,11 @@ void handleUploading() {
 }
 
 void handleSummarizing() {
+    if (!wifiManager.reconnect()) {
+        lastError = "WiFi lost before summarizing";
+        currentState = STATE_ERROR;
+        return;
+    }
     String transcript = whisper.getTranscript();
     
     if (llm.summarize(transcript)) {
@@ -304,6 +313,11 @@ void handleSummarizing() {
 }
 
 void handleEmailing() {
+    if (!wifiManager.reconnect()) {
+        lastError = "WiFi lost before emailing";
+        currentState = STATE_ERROR;
+        return;
+    }
     String summary = llm.getSummary();
     String transcript = whisper.getTranscript();
     

@@ -82,14 +82,14 @@ bool LLMClient::summarize(const String& transcript) {
     String response = "";
     unsigned long startTime = millis();
     
-    while (client.connected() && (millis() - startTime < API_TIMEOUT)) {
+    while ((client.connected() || client.available()) && (millis() - startTime < API_TIMEOUT)) {
         while (client.available()) {
             char c = client.read();
             response += c;
         }
         delay(10);
     }
-    
+
     client.stop();
     
     // Parse response
@@ -131,11 +131,12 @@ bool LLMClient::sendRequest(const String& transcript) {
     serializeJson(doc, jsonString);
     
     // Build HTTP request
-    String httpRequest = "POST /openai/v1/chat/completions HTTP/1.1\r\n";
+    String httpRequest = "POST /openai/v1/chat/completions HTTP/1.0\r\n";
     httpRequest += "Host: api.groq.com\r\n";
     httpRequest += "Authorization: Bearer " + apiKey + "\r\n";
     httpRequest += "Content-Type: application/json\r\n";
     httpRequest += "Content-Length: " + String(jsonString.length()) + "\r\n";
+    httpRequest += "Connection: close\r\n";
     httpRequest += "\r\n";
     httpRequest += jsonString;
     
@@ -160,7 +161,7 @@ bool LLMClient::parseResponse(const String& response) {
     String body = response.substring(bodyStart + 4);
     
     // Parse JSON
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(16384);
     DeserializationError error = deserializeJson(doc, body);
     
     if (error) {

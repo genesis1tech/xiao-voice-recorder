@@ -73,11 +73,12 @@ bool EmailClient::send(const String& to, const String& subject, const String& bo
     serializeJson(doc, jsonString);
     
     // Build HTTP request
-    String httpRequest = "POST /v3/mail/send HTTP/1.1\r\n";
+    String httpRequest = "POST /v3/mail/send HTTP/1.0\r\n";
     httpRequest += "Host: api.sendgrid.com\r\n";
     httpRequest += "Authorization: Bearer " + apiKey + "\r\n";
     httpRequest += "Content-Type: application/json\r\n";
     httpRequest += "Content-Length: " + String(jsonString.length()) + "\r\n";
+    httpRequest += "Connection: close\r\n";
     httpRequest += "\r\n";
     httpRequest += jsonString;
     
@@ -89,8 +90,8 @@ bool EmailClient::send(const String& to, const String& subject, const String& bo
     // Read response (SendGrid returns 202 on success)
     String response = "";
     unsigned long startTime = millis();
-    
-    while (client.connected() && (millis() - startTime < 30000)) {
+
+    while ((client.connected() || client.available()) && (millis() - startTime < 15000)) {
         while (client.available()) {
             char c = client.read();
             response += c;
