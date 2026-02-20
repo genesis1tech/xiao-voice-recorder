@@ -122,6 +122,9 @@ void setup() {
     if (wifiManager.begin()) {
         Serial.printf("WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
         initAfterWiFi();
+        // Clear any button state that accumulated during init (GPIO0 picks up noise)
+        buttonHeld = false;
+        buttonPressed = false;
         currentState = STATE_IDLE;
     } else {
         Serial.printf("\nAP Mode: Connect to '%s'\n", wifiManager.getAPSSID().c_str());
@@ -206,9 +209,12 @@ void handleWiFiSetup() {
         Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
         
         initAfterWiFi();
+        // Clear any button state that accumulated during init (GPIO0 picks up noise)
+        buttonHeld = false;
+        buttonPressed = false;
         currentState = STATE_IDLE;
     }
-    
+
     // LED: slow pulse in AP mode
     static unsigned long lastPulse = 0;
     static int brightness = 0;
